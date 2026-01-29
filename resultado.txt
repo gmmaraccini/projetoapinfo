@@ -1,0 +1,10 @@
+--- Iniciando Robô APInfo ---
+
+⚠️  AÇÃO NECESSÁRIA:
+1. No navegador aberto, clique em 'Enviar Currículo' em qualquer vaga.
+2. Faça o login com seu CPF/Senha e resolva o CAPTCHA.
+3. APÓS estar logado e vendo os dados da vaga, volte aqui no terminal.
+
+Presione ENTER aqui no terminal para continuar após o login...Mapeando vagas disponíveis...
+--------------------------------------------------
+Fim do processo. Fechando navegador.
