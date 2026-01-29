@@ -57,7 +57,7 @@ def verifica_pedido_salario(descricao_vaga):
 
 def iniciar_automacao():
     print("\n" + "="*60)
-    print("🚀 ROBÔ APINFO - MODO ATIVO (ENVIANDO E-MAILS REAIS)")
+    print("🚀 ROBÔ APINFO - MODO ATIVO (COM TRAVA DE BLOQUEIO 173)")
     print("="*60 + "\n")
     
     options = webdriver.ChromeOptions()
@@ -114,7 +114,7 @@ def iniciar_automacao():
 
                 driver.execute_script(f"window.open('{link}', '_blank');")
                 driver.switch_to.window(driver.window_handles[-1])
-                time.sleep(3) # Aumentei um pouco para evitar bloqueio rápido 
+                time.sleep(3) 
 
                 if not ja_logou:
                     print("\n" + "█"*60)
@@ -139,6 +139,19 @@ def iniciar_automacao():
 
                     if match_email:
                         email_dest = match_email.group(0)
+                        
+                        # =================================================================
+                        # ⛔ TRAVA DE SEGURANÇA (BLOQUEIO APINFO)
+                        # =================================================================
+                        if "staff@apinfo.com" in email_dest:
+                            print("\n" + "⛔"*30)
+                            print("ALERTA CRÍTICO: DETECTADO BLOQUEIO DO APINFO!")
+                            print("O site redirecionou para a página de erro/aviso (staff@apinfo.com).")
+                            print("O Apinfo bloqueou temporariamente o envio de emails automaticos.. tente mais tarde")
+                            print("⛔"*30 + "\n")
+                            driver.quit() # Fecha o navegador
+                            return # ENCERRA O PROGRAMA IMEDIATAMENTE
+
                         match_assunto = re.search(r'Assunto.*:(.*)', texto_pagina)
                         assunto_cod = match_assunto.group(1).strip() if match_assunto else "Vaga PHP"
 
@@ -188,7 +201,7 @@ Atenciosamente,
 
                 driver.close()
                 driver.switch_to.window(janela_lista)
-                time.sleep(2) # Pausa estratégica para evitar bloqueio 173
+                time.sleep(2) 
 
             # PAGINAÇÃO MANUAL
             print("\n" + "█"*50)
