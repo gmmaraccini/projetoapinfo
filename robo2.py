@@ -1,11 +1,13 @@
 import re
 import time
 import urllib.parse
-import webbrowser
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # Importa o disparador configurado
 from disparador import enviar_email_final
@@ -16,6 +18,7 @@ from disparador import enviar_email_final
 MEU_NOME = "Gabriel Maraccini"
 LINK_WHATSAPP = "https://wa.me/5511984314366"
 TELEFONE_FORMATADO = "(11) 98431-4366"
+DDD_PADRAO = "11" 
 
 DOMINIOS_GENERICOS = [
     "gmail.com", "hotmail.com", "outlook.com", "yahoo.com.br", 
@@ -48,28 +51,34 @@ SOFT_SKILLS = [
 # FUNÇÕES AUXILIARES
 # ==============================================================================
 
-def verificar_sincronizacao_whatsapp():
-    """
-    Abre o WhatsApp Web e aguarda confirmação manual do usuário
-    para garantir que o envio posterior não falhe.
-    """
-    print("\n" + "█"*60)
-    print("📲 VERIFICAÇÃO DE WHATSAPP")
-    print("Vou abrir o WhatsApp Web agora para testar a conexão.")
-    print("█"*60)
-    
-    webbrowser.open("https://web.whatsapp.com")
-    
-    print("\n⚠️  ATENÇÃO: O WhatsApp abriu e carregou suas conversas?")
-    print("   [1] Se apareceu o QR CODE: Escaneie agora com seu celular.")
-    print("   [2] Se já apareceram as conversas: Tudo pronto.")
-    
-    # Trava o script aqui até você apertar Enter
-    input("\n>>> Quando estiver sincronizado e pronto, PRESSIONE ENTER para começar...")
-    print("✅ WhatsApp Confirmado! Iniciando automação...\n")
+def get_text_safe(driver, by, value):
+    try:
+        element = driver.find_element(by, value)
+        if element: return element.text
+    except: pass
+    return ""
 
+def fechar_aba_segura(driver, janela_para_voltar):
+    """
+    Fecha a aba atual (se não for a última) e volta para a janela especificada.
+    """
+    try:
+        # Se tiver mais de 1 aba aberta, fecha a atual
+        if len(driver.window_handles) > 1:
+            driver.close()
+    except Exception:
+        pass 
+    
+    # Tenta focar na janela de destino (Vaga ou Lista)
+    try:
+        driver.switch_to.window(janela_para_voltar)
+    except:
+        # Se a janela de destino sumiu, pega a última disponível
+        if len(driver.window_handles) > 0:
+            driver.switch_to.window(driver.window_handles[-1])
 
 def analisar_aderencia(descricao_vaga):
+    if not descricao_vaga: return []
     desc_lower = descricao_vaga.lower()
     matches = []
     for skill in HARD_SKILLS:
@@ -81,108 +90,167 @@ def analisar_aderencia(descricao_vaga):
     return sorted(list(set(matches)))
 
 def verifica_pedido_salario(descricao_vaga):
+    if not descricao_vaga: return ""
     desc_lower = descricao_vaga.lower()
     if any(termo in desc_lower for termo in TERMOS_SALARIO):
         return "\nPretensão salarial: R$ 8.000,00 ou a combinar dependendo dos benefícios."
     return ""
 
-def buscar_e_contatar_whatsapp(driver, email_empresa, titulo_vaga):
+def extrair_celulares(texto):
+    if not texto: return []
+    padrao = r'(?:\(?([1-9][0-9])\)?\s?)?(9\d{4})[\s-]?(\d{4})'
+    encontrados = re.findall(padrao, texto)
+    lista_formatada = []
+    for match in encontrados:
+        ddd, parte1, parte2 = match[0], match[1], match[2]
+        celular_limpo = f"{parte1}{parte2}"
+        if ddd:
+            numero_final = f"55{ddd}{celular_limpo}"
+        else:
+            numero_final = f"55{DDD_PADRAO}{celular_limpo}"
+        lista_formatada.append(numero_final)
+    return list(set(lista_formatada))
+
+def buscar_e_contatar_whatsapp(driver, email_empresa, titulo_vaga, janela_anterior_vaga):
+    """
+    Abre o WhatsApp, envia e fecha, voltando para a janela da VAGA (não da lista).
+    """
     try:
+        if not email_empresa or "@" not in email_empresa: return
         dominio = email_empresa.split("@")[1].lower()
-        
         if dominio in DOMINIOS_GENERICOS:
             print(f"   ℹ️ Domínio genérico ({dominio}). Pulando busca de site.")
             return
 
-        url_empresa = f"http://www.{dominio}"
-        print(f"\n   🌍 Visitando site da empresa: {url_empresa}...")
+        url_home = f"http://www.{dominio}"
+        print(f"\n   🌍 Iniciando varredura no site: {url_home}...")
 
-        driver.execute_script(f"window.open('{url_empresa}', '_blank');")
+        telefones_encontrados = set()
+
+        # 1. ANALISAR A HOME
+        driver.execute_script(f"window.open('{url_home}', '_blank');")
         driver.switch_to.window(driver.window_handles[-1])
         
-        driver.set_page_load_timeout(15)
+        driver.set_page_load_timeout(20)
         try:
             time.sleep(4)
-            texto_site = driver.find_element(By.TAG_NAME, "body").text
+            texto_home = get_text_safe(driver, By.TAG_NAME, "body")
+            telefones_home = extrair_celulares(texto_home)
+            telefones_encontrados.update(telefones_home)
+            if telefones_home:
+                print(f"      -> Home: Encontrei {len(telefones_home)} números.")
         except:
-            print("   ⚠️ Site demorou. Tentando ler o que carregou...")
-            try:
-                texto_site = driver.find_element(By.TAG_NAME, "body").text
-            except:
-                texto_site = ""
+            print("      ⚠️ Erro ao ler a Home.")
 
-        padrao_tel = r'(?:(?:\+|00)?(55)\s?)?(?:\(?([1-9][0-9])\)?\s?)?(?:((?:9\d|[2-9])\d{3})\-?(\d{4}))'
-        
-        def extrair_telefones(texto):
-            encontrados = re.findall(padrao_tel, texto)
-            lista = []
-            for match in encontrados:
-                ddd, p1, p2 = match[1], match[2], match[3]
-                numero_completo = f"{ddd}{p1}{p2}"
-                if ddd and len(numero_completo) >= 11 and p1.startswith('9'): 
-                    lista.append(numero_completo)
-            return lista
-
-        telefones_validos = extrair_telefones(texto_site)
-        
-        if not telefones_validos:
-            print("   ⚠️ Nenhum celular na Home. Buscando 'Fale Conosco'...")
-            try:
-                xpaths = [
-                    "//a[contains(translate(text(), 'C', 'c'), 'contato')]",
-                    "//a[contains(translate(text(), 'F', 'f'), 'fale')]",
-                    "//a[contains(translate(text(), 'T', 't'), 'trabalhe')]",
-                    "//a[contains(@href, 'contato')]"
-                ]
-                for xpath in xpaths:
-                    elementos = driver.find_elements(By.XPATH, xpath)
-                    if elementos:
-                        try:
-                            elementos[0].click()
-                            time.sleep(4)
-                            texto_contato = driver.find_element(By.TAG_NAME, "body").text
-                            telefones_validos.extend(extrair_telefones(texto_contato))
-                            break
-                        except:
-                            pass
-            except:
-                pass
-
-        telefones_validos = list(set(telefones_validos))
-
-        if telefones_validos:
-            print(f"   📱 Celulares encontrados: {telefones_validos}")
+        # 2. BUSCAR LINKS INTERNOS
+        termos_busca = ['contato', 'fale', 'trabalhe', 'contact', 'work']
+        links_para_visitar = []
+        try:
+            elementos_a = driver.find_elements(By.TAG_NAME, "a")
+            for elem in elementos_a:
+                href = elem.get_attribute("href")
+                try: texto_link = elem.text.lower()
+                except: texto_link = ""
+                
+                if href and any(termo in texto_link or termo in href.lower() for termo in termos_busca):
+                    if dominio in href and "mailto" not in href and "whatsapp" not in href:
+                        links_para_visitar.append(href)
             
+            links_para_visitar = list(set(links_para_visitar))[:3]
+            
+            for link_interno in links_para_visitar:
+                try:
+                    print(f"         Visitando: {link_interno}...")
+                    driver.execute_script(f"window.open('{link_interno}', '_blank');")
+                    driver.switch_to.window(driver.window_handles[-1])
+                    time.sleep(3)
+                    
+                    texto_pag = get_text_safe(driver, By.TAG_NAME, "body")
+                    tels_pag = extrair_celulares(texto_pag)
+                    if tels_pag:
+                        print(f"         + {len(tels_pag)} novos números.")
+                        telefones_encontrados.update(tels_pag)
+                    
+                    fechar_aba_segura(driver, driver.window_handles[-1]) # Fecha e volta pra home
+                except:
+                    fechar_aba_segura(driver, driver.window_handles[-1])
+
+        except Exception as e:
+            print(f"      Erro ao buscar links internos: {e}")
+
+        # Fecha a aba da empresa e volta para a janela da VAGA
+        fechar_aba_segura(driver, janela_anterior_vaga)
+
+        # 3. DISPARAR WHATSAPP
+        lista_final = list(telefones_encontrados)
+        if lista_final:
+            print(f"   📱 TELEFONES ENCONTRADOS (Formatados): {lista_final}")
             msg_texto = f"Bom dia, meu nome é {MEU_NOME}. Enviei um currículo para a vaga '{titulo_vaga}'. Fiquei muito interessado e gostaria que vocês avaliassem meu currículo. Obrigado =)"
             msg_encoded = urllib.parse.quote(msg_texto)
 
-            for fone in telefones_validos:
-                link_wa = f"https://web.whatsapp.com/send?phone=55{fone}&text={msg_encoded}"
-                print(f"   💬 Preparando WhatsApp para: {fone}")
+            for fone in lista_final:
+                link_wa = f"https://web.whatsapp.com/send?phone={fone}&text={msg_encoded}"
+                print(f"   💬 Abrindo WhatsApp para: {fone}...")
                 
-                # Abre no Chrome padrão do usuário
-                webbrowser.open_new_tab(link_wa)
-                time.sleep(1.5) 
+                driver.execute_script(f"window.open('{link_wa}', '_blank');")
+                driver.switch_to.window(driver.window_handles[-1])
+                
+                try:
+                    # ESPERA E ENVIA (IGUAL AO SCRIPT DE NATAL)
+                    print("      -> Aguardando carregamento (15s)...")
+                    time.sleep(15) 
+
+                    # Verifica erro de número
+                    try:
+                        aviso = driver.find_elements(By.XPATH, '//*[contains(text(), "inválido") or contains(text(), "invalid")]')
+                        if aviso and aviso[0].is_displayed():
+                            print(f"      ❌ Número Inválido.")
+                            fechar_aba_segura(driver, janela_anterior_vaga)
+                            continue 
+                    except: pass
+
+                    # Tenta ENVIAR
+                    print("      -> Tentando enviar...")
+                    enviado = False
+                    
+                    try:
+                        # Tenta botão
+                        btn = WebDriverWait(driver, 5).until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, "span[data-icon='send']"))
+                        )
+                        btn.click()
+                        enviado = True
+                        print("      ✅ Enviado (Clique no Botão).")
+                    except:
+                        # Tenta Enter na caixa
+                        try:
+                            caixa = driver.find_element(By.CSS_SELECTOR, '#main footer div[contenteditable="true"]')
+                            caixa.send_keys(Keys.ENTER)
+                            enviado = True
+                            print("      ✅ Enviado (Enter na Caixa).")
+                        except:
+                            print("      ⚠️ Não consegui achar botão nem caixa.")
+
+                    if enviado:
+                        time.sleep(5)
+
+                except Exception as e:
+                    print(f"      ❌ Erro no Whats: {e}")
+                
+                # FECHA O WHATSAPP E VOLTA PRA VAGA
+                fechar_aba_segura(driver, janela_anterior_vaga)
+                
         else:
             print("   ❌ Nenhum celular encontrado no site.")
-
-        driver.close()
         
     except Exception as e:
-        print(f"   ⚠️ Erro ao navegar no site da empresa: {e}")
-        try:
-            if len(driver.window_handles) > 2:
-                driver.close()
-        except:
-            pass
+        print(f"   ⚠️ Erro geral na navegação da empresa: {e}")
+        try: driver.switch_to.window(janela_anterior_vaga)
+        except: pass
 
 def iniciar_automacao():
-    # === PASSO 1: VERIFICAÇÃO DE WHATSAPP ===
-    verificar_sincronizacao_whatsapp()
-    
-    # === PASSO 2: INICIA O ROBÔ DE VAGAS ===
     print("\n" + "="*60)
-    print("🚀 ROBÔ APINFO - MODO COMPLETO (EMAIL + WHATSAPP)")
+    print("🚀 ROBÔ APINFO - VERSÃO FINAL CHECK-MATE")
     print("="*60 + "\n")
     
     options = webdriver.ChromeOptions()
@@ -191,21 +259,44 @@ def iniciar_automacao():
     
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
+    # 1. WHATSAPP
+    print("\n" + "█"*60)
+    print("📲 PASSO 1: WHATSAPP WEB")
+    print("Vou abrir o WhatsApp. Escaneie o QR Code se necessário.")
+    print("█"*60)
+    
+    driver.get("https://web.whatsapp.com")
+    input(">>> DEPOIS QUE CARREGAR AS CONVERSAS, DÊ ENTER...")
+
+    # 2. LISTA
+    print("\n" + "█"*60)
+    print("📋 PASSO 2: ESCOLHA A LISTA DE VAGAS")
+    print("Vou abrir a APInfo. Navegue até a lista desejada.")
+    print("█"*60)
+
+    driver.get("https://www.apinfo.com/apinfo/inc/list4.cfm")
+    
+    input(">>> QUANDO ESTIVER VENDO A LISTA DE VAGAS DESEJADA, DÊ ENTER...")
+    
+    janela_lista = driver.current_window_handle
+    print(f"✅ Janela da Lista fixada!")
+
     ja_logou = False
     pagina_atual = 1
-    limite_paginas = 10 
+    limite_paginas = 100 
 
     try:
-        url = "https://www.apinfo.com/apinfo/inc/list4.cfm" 
-        print(f"Acessando: {url}")
-        driver.get(url)
-        time.sleep(3)
-
         while pagina_atual <= limite_paginas:
-            print(f"\n📍 PROCESSANDO PÁGINA {pagina_atual}")
+            print(f"\n📍 PROCESSANDO PÁGINA ATUAL")
             
+            driver.switch_to.window(janela_lista)
             botoes = driver.find_elements(By.LINK_TEXT, "Envie seu currículo")
             
+            if not botoes:
+                print("⚠️ Não achei botões. Tente recarregar.")
+                input(">>> Dê ENTER para tentar novamente...")
+                continue
+
             lista_vagas = []
             for btn in botoes:
                 link = btn.get_attribute("href")
@@ -213,51 +304,53 @@ def iniciar_automacao():
                     elemento_pai = btn.find_element(By.XPATH, "./../..") 
                     texto_bruto = elemento_pai.text.replace("Envie seu currículo", "").strip()
                     descricao_full = texto_bruto if len(texto_bruto) > 10 else "Descrição não capturada"
-                    if descricao_full == "Descrição não capturada":
-                         elemento_avo = btn.find_element(By.XPATH, "./../../..")
-                         descricao_full = elemento_avo.text.replace("Envie seu currículo", "").strip()
                 except:
                     descricao_full = "Descrição não capturada"
-
                 if link:
                     lista_vagas.append({'link': link, 'desc': descricao_full})
 
+            # Remove duplicados
             vagas_unicas = list({v['link']: v for v in lista_vagas}.values())
-            print(f"Encontrei {len(vagas_unicas)} vagas.")
-
-            janela_lista = driver.current_window_handle
+            print(f"Encontrei {len(vagas_unicas)} vagas nesta página.")
 
             for i, vaga in enumerate(vagas_unicas):
+                driver.switch_to.window(janela_lista)
+                
                 link = vaga['link']
                 desc_completa = vaga['desc']
 
                 print(f"--------------------------------------------------")
-                print(f"[Pg {pagina_atual} | Vaga {i+1}] Analisando...")
+                print(f"[Vaga {i+1}/{len(vagas_unicas)}] Analisando...")
 
+                # Abre a VAGA
                 driver.execute_script(f"window.open('{link}', '_blank');")
+                time.sleep(2)
                 driver.switch_to.window(driver.window_handles[-1])
                 janela_vaga = driver.current_window_handle
-                
-                time.sleep(3) 
 
+                # Login Manual
                 if not ja_logou:
                     print("\n" + "█"*60)
-                    print("⚠️  PAUSA PARA LOGIN APINFO ⚠️")
+                    print("⚠️  PAUSA PARA LOGIN NA VAGA ⚠️")
                     print("1. Logue na vaga aberta.")
                     print("2. Volte aqui e dê ENTER.")
                     print("█"*60 + "\n")
                     input(">>> ENTER APÓS LOGAR...")
                     ja_logou = True
+                    janela_vaga = driver.window_handles[-1]
+                    driver.switch_to.window(janela_vaga)
                     time.sleep(1)
 
                 try:
-                    texto_pagina = driver.find_element(By.TAG_NAME, "body").text
+                    texto_pagina = get_text_safe(driver, By.TAG_NAME, "body")
                     match_email = re.search(r'[\w\.-]+@[\w\.-]+', texto_pagina)
                     
                     if not match_email:
                         print("\n⚠️ E-mail não visível. O login pode ter expirado.")
                         input(">>> Faça login novamente e dê ENTER...")
-                        texto_pagina = driver.find_element(By.TAG_NAME, "body").text
+                        driver.switch_to.window(driver.window_handles[-1]) 
+                        janela_vaga = driver.current_window_handle
+                        texto_pagina = get_text_safe(driver, By.TAG_NAME, "body")
                         match_email = re.search(r'[\w\.-]+@[\w\.-]+', texto_pagina)
 
                     if match_email:
@@ -273,15 +366,10 @@ def iniciar_automacao():
                         assunto_cod = match_assunto.group(1).strip() if match_assunto else "Vaga PHP"
 
                         skills_encontradas = analisar_aderencia(desc_completa)
-                        if skills_encontradas:
-                            lista_skills_txt = "\n".join([f"- {s}" for s in skills_encontradas])
-                            texto_match = f"\n\nCruzando as informações da vaga com meu currículo, identifiquei total aderência nos seguintes pontos:\n{lista_skills_txt}"
-                        else:
-                            texto_match = ""
+                        texto_match = f"\n\nCruzando as informações da vaga com meu currículo, identifiquei total aderência nos seguintes pontos:\n{chr(10).join(['- '+s for s in skills_encontradas])}" if skills_encontradas else ""
 
                         texto_salario = verifica_pedido_salario(desc_completa)
-                        if texto_salario:
-                            print("   💰 Vaga pede pretensão salarial.")
+                        if texto_salario: print("   💰 Vaga pede pretensão salarial.")
 
                         corpo = f"""
 Olá,
@@ -306,32 +394,31 @@ Atenciosamente,
                         print(f"   📧 Enviando para: {email_dest}...")
                         enviar_email_final(email_dest, assunto_cod, corpo)
                         
-                        buscar_e_contatar_whatsapp(driver, email_dest, assunto_cod)
-
+                        # --- PULO DO GATO ---
+                        # Passamos 'janela_vaga' (filha) e não 'janela_lista' (mãe)
+                        # Assim o WhatsApp fecha e volta pra vaga. E a vaga fecha e volta pra lista.
+                        buscar_e_contatar_whatsapp(driver, email_dest, assunto_cod, janela_vaga)
                     else:
                         print("   ❌ Sem e-mail nesta vaga.")
-
-                except Exception as e:
-                    print(f"   Erro: {e}")
-
-                try:
-                    if driver.current_window_handle == janela_vaga:
-                        driver.close()
-                except:
-                    pass
                 
-                driver.switch_to.window(janela_lista)
-                time.sleep(2) 
+                except Exception as e:
+                    print(f"   Erro no processo da vaga: {e}")
+                
+                finally:
+                    # Agora sim, fechamos a aba da vaga com segurança
+                    # e voltamos para a lista principal
+                    fechar_aba_segura(driver, janela_lista)
+                    time.sleep(1) 
 
             print("\n" + "█"*50)
-            print("✅ FIM DA PÁGINA.")
-            print(f"👉 CLIQUE NA PÁGINA {pagina_atual + 1} NO CHROME.")
+            print("✅ FIM DAS VAGAS DESTA PÁGINA.")
+            print(f"👉 AGORA, LÁ NO CHROME, CLIQUE NA PRÓXIMA PÁGINA (Ex: Pg 2, 3...)")
             print("█"*50 + "\n")
-            input(f">>> ENTER QUANDO A PÁGINA {pagina_atual + 1} CARREGAR...")
+            input(f">>> QUANDO A NOVA PÁGINA CARREGAR, DÊ ENTER AQUI...")
             pagina_atual += 1
 
     except Exception as e:
-        print(f"ERRO: {e}")
+        print(f"ERRO GERAL: {e}")
     finally:
         print("Fim.")
 
